@@ -136,34 +136,6 @@ def seconds_to_srt_time(sec: float) -> str:
     return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
 
 
-def transcribe_to_srt(audio_path: str, time_offset: float = 0.0) -> list[dict]:
-    """调用 Groq Whisper API 转录，返回 segments."""
-    client = Groq(api_key=GROQ_API_KEY)
-    with open(audio_path, "rb") as f:
-        result = client.audio.transcriptions.create(
-            file=(os.path.basename(audio_path), f),
-            model="whisper-large-v3",
-            language="zh",
-            response_format="verbose_json",
-        )
-
-    segments = []
-    if hasattr(result, "segments") and result.segments:
-        for seg in result.segments:
-            segments.append({
-                "start": seg["start"] + time_offset,
-                "end": seg["end"] + time_offset,
-                "text": seg["text"].strip(),
-            })
-    elif hasattr(result, "text") and result.text:
-        # fallback: 没有分段信息时整段返回
-        segments.append({
-            "start": time_offset,
-            "end": time_offset + 30.0,
-            "text": result.text.strip(),
-        })
-    return segments
-
 
 def segments_to_srt(segments: list[dict]) -> str:
     lines = []
