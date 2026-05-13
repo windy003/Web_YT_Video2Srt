@@ -243,6 +243,8 @@
             <div class="toolbar">
                 <h2>字幕内容</h2>
                 <div class="toolbar-btns">
+                    <button class="btn-sm" onclick="changeFontSize(-1)" title="缩小字体">A-</button>
+                    <button class="btn-sm" onclick="changeFontSize(1)" title="放大字体">A+</button>
                     <button class="btn-sm" onclick="downloadSrt()">下载 .srt</button>
                     <button class="btn-sm" onclick="copySrt()">复制</button>
                 </div>
@@ -255,6 +257,9 @@
 
     <script>
         let srtContent = '';
+        let currentFontSize = 15;
+        const MIN_FONT_SIZE = 10;
+        const MAX_FONT_SIZE = 40;
         let stageTimer = null;
         let stageLabel = '';
         let stageStart = 0;
@@ -377,7 +382,7 @@
                                 div.className = 'subtitle-item';
                                 div.innerHTML = `
                                     <span class="ts">${fmtTime(seg.start)}</span>
-                                    <span class="text">${escHtml(seg.text)}</span>
+                                    <span class="text" style="font-size:${currentFontSize}px">${escHtml(seg.text)}</span>
                                 `;
                                 list.appendChild(div);
                             }
@@ -422,6 +427,15 @@
         function copySrt() {
             if (!srtContent) return;
             navigator.clipboard.writeText(srtContent).then(() => showToast('已复制到剪贴板'));
+        }
+
+        function changeFontSize(delta) {
+            const next = currentFontSize + delta * 2;
+            if (next < MIN_FONT_SIZE || next > MAX_FONT_SIZE) return;
+            currentFontSize = next;
+            document.querySelectorAll('#subtitleList .text').forEach(el => {
+                el.style.fontSize = currentFontSize + 'px';
+            });
         }
 
         function showToast(msg) {
