@@ -1,0 +1,1 @@
+start  /b   pythonw  "D:\files\using\Web\Web_YT_Video2Srt\app.py"

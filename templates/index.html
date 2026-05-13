@@ -1,0 +1,318 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>YouTube 中文字幕转录</title>
+    <link rel="apple-touch-icon" href="{{ url_for('static', filename='2048x2048.png') }}">
+    <link rel="icon" href="{{ url_for('static', filename='2048x2048.png') }}">
+
+    
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, "Microsoft YaHei", sans-serif;
+            background: #ffffff;
+            color: #222;
+            min-height: 100vh;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 40px 20px;
+        }
+        h1 {
+            text-align: center;
+            font-size: 24px;
+            margin-bottom: 30px;
+            color: #111;
+        }
+        .input-row {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+        input[type="text"] {
+            flex: 1;
+            padding: 12px 16px;
+            border: 1px solid #ccc;
+            border-radius: 8px;
+            background: #f9f9f9;
+            color: #222;
+            font-size: 15px;
+            outline: none;
+        }
+        input[type="text"]:focus {
+            border-color: #3ea6ff;
+        }
+        button {
+            padding: 12px 28px;
+            background: #3ea6ff;
+            color: #fff;
+            border: none;
+            border-radius: 8px;
+            font-size: 15px;
+            font-weight: 600;
+            cursor: pointer;
+            white-space: nowrap;
+        }
+        button:hover { background: #65b8ff; }
+        button:disabled {
+            background: #ddd;
+            color: #999;
+            cursor: not-allowed;
+        }
+
+        /* 进度条 */
+        .progress {
+            display: none;
+            margin-bottom: 20px;
+        }
+        .progress.active { display: block; }
+        .progress-bar {
+            height: 4px;
+            background: #e0e0e0;
+            border-radius: 2px;
+            overflow: hidden;
+        }
+        .progress-bar-inner {
+            height: 100%;
+            background: #3ea6ff;
+            animation: indeterminate 1.5s infinite ease-in-out;
+            width: 40%;
+            border-radius: 2px;
+        }
+        @keyframes indeterminate {
+            0%   { transform: translateX(-100%); }
+            100% { transform: translateX(350%); }
+        }
+        .progress-text {
+            text-align: center;
+            margin-top: 10px;
+            color: #888;
+            font-size: 14px;
+        }
+
+        /* 错误 */
+        .error {
+            display: none;
+            background: #fef2f2;
+            border: 1px solid #fca5a5;
+            color: #dc2626;
+            padding: 12px 16px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            font-size: 14px;
+            word-break: break-all;
+        }
+        .error.active { display: block; }
+
+        /* 结果区域 */
+        .result {
+            display: none;
+        }
+        .result.active { display: block; }
+
+        .toolbar {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 16px;
+        }
+        .toolbar h2 {
+            font-size: 18px;
+            color: #111;
+        }
+        .toolbar-btns {
+            display: flex;
+            gap: 8px;
+        }
+        .btn-sm {
+            padding: 6px 14px;
+            font-size: 13px;
+            background: #f3f3f3;
+            color: #555;
+            border: 1px solid #ccc;
+            border-radius: 6px;
+            cursor: pointer;
+        }
+        .btn-sm:hover { background: #e5e5e5; color: #222; }
+
+        /* 字幕列表 */
+        .subtitle-list {
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+        }
+        .subtitle-item {
+            display: flex;
+            gap: 14px;
+            padding: 10px 14px;
+            border-radius: 6px;
+            transition: background 0.15s;
+        }
+        .subtitle-item:hover {
+            background: #f5f5f5;
+        }
+        .ts {
+            flex-shrink: 0;
+            color: #3ea6ff;
+            font-size: 13px;
+            font-family: monospace;
+            padding-top: 2px;
+            min-width: 90px;
+        }
+        .text {
+            font-size: 15px;
+            line-height: 1.7;
+            color: #333;
+        }
+
+
+
+        .toast {
+            position: fixed;
+            bottom: 30px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: #222;
+            color: #fff;
+            padding: 10px 20px;
+            border-radius: 6px;
+            font-size: 14px;
+            opacity: 0;
+            transition: opacity 0.3s;
+            pointer-events: none;
+        }
+        .toast.show { opacity: 1; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>YouTube 中文视频字幕转录</h1>
+
+        <div class="input-row">
+            <input type="text" id="url" placeholder="粘贴 YouTube 视频链接..." />
+            <button id="btn" onclick="run()">开始转录</button>
+        </div>
+
+        <div class="progress" id="progress">
+            <div class="progress-bar"><div class="progress-bar-inner"></div></div>
+            <div class="progress-text" id="progressText">正在下载音频...</div>
+        </div>
+
+        <div class="error" id="error"></div>
+
+        <div class="result" id="result">
+            <div class="toolbar">
+                <h2>字幕内容</h2>
+                <div class="toolbar-btns">
+                    <button class="btn-sm" onclick="downloadSrt()">下载 .srt</button>
+                    <button class="btn-sm" onclick="copySrt()">复制</button>
+                </div>
+            </div>
+            <div class="subtitle-list" id="subtitleList"></div>
+        </div>
+    </div>
+
+    <div class="toast" id="toast"></div>
+
+    <script>
+        let srtContent = '';
+
+        async function run() {
+            const url = document.getElementById('url').value.trim();
+            if (!url) return;
+
+            const btn = document.getElementById('btn');
+            const progress = document.getElementById('progress');
+            const progressText = document.getElementById('progressText');
+            const errorEl = document.getElementById('error');
+            const resultEl = document.getElementById('result');
+
+            btn.disabled = true;
+            errorEl.className = 'error';
+            resultEl.className = 'result';
+            progress.className = 'progress active';
+            progressText.textContent = '正在下载音频并转录，请耐心等待...';
+
+            try {
+                const resp = await fetch('/transcribe', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ url }),
+                });
+                const data = await resp.json();
+
+                if (!resp.ok || data.error) {
+                    throw new Error(data.error || '请求失败');
+                }
+
+                srtContent = data.srt;
+
+                // 渲染字幕列表
+                const list = document.getElementById('subtitleList');
+                list.innerHTML = '';
+                for (const seg of data.segments) {
+                    const div = document.createElement('div');
+                    div.className = 'subtitle-item';
+                    div.innerHTML = `
+                        <span class="ts">${fmtTime(seg.start)}</span>
+                        <span class="text">${escHtml(seg.text)}</span>
+                    `;
+                    list.appendChild(div);
+                }
+
+                resultEl.className = 'result active';
+
+            } catch (e) {
+                errorEl.textContent = e.message;
+                errorEl.className = 'error active';
+            } finally {
+                progress.className = 'progress';
+                btn.disabled = false;
+            }
+        }
+
+        function fmtTime(sec) {
+            const h = Math.floor(sec / 3600);
+            const m = Math.floor((sec % 3600) / 60);
+            const s = Math.floor(sec % 60);
+            if (h > 0) return `${h}:${pad(m)}:${pad(s)}`;
+            return `${m}:${pad(s)}`;
+        }
+        function pad(n) { return n.toString().padStart(2, '0'); }
+        function escHtml(s) {
+            const d = document.createElement('div');
+            d.textContent = s;
+            return d.innerHTML;
+        }
+
+        function downloadSrt() {
+            if (!srtContent) return;
+            const blob = new Blob([srtContent], { type: 'text/plain;charset=utf-8' });
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = 'subtitle.srt';
+            a.click();
+        }
+
+        function copySrt() {
+            if (!srtContent) return;
+            navigator.clipboard.writeText(srtContent).then(() => showToast('已复制到剪贴板'));
+        }
+
+        function showToast(msg) {
+            const t = document.getElementById('toast');
+            t.textContent = msg;
+            t.classList.add('show');
+            setTimeout(() => t.classList.remove('show'), 2000);
+        }
+
+        // 回车触发
+        document.getElementById('url').addEventListener('keydown', e => {
+            if (e.key === 'Enter') run();
+        });
+    </script>
+</body>
+</html>
