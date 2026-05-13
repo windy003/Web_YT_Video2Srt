@@ -93,6 +93,40 @@
             font-size: 14px;
         }
 
+        /* 统计信息 */
+        .stats {
+            display: none;
+            background: #f8f9fa;
+            border: 1px solid #e0e0e0;
+            border-radius: 8px;
+            padding: 14px 18px;
+            margin-bottom: 20px;
+            font-size: 14px;
+            color: #555;
+        }
+        .stats.active { display: block; }
+        .stats-title {
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 8px;
+        }
+        .stats-item {
+            display: flex;
+            justify-content: space-between;
+            padding: 3px 0;
+        }
+        .stats-item .label { color: #555; }
+        .stats-item .value { color: #3ea6ff; font-family: monospace; font-weight: 600; }
+        .stats-total {
+            border-top: 1px solid #e0e0e0;
+            margin-top: 6px;
+            padding-top: 6px;
+            display: flex;
+            justify-content: space-between;
+            font-weight: 600;
+            color: #333;
+        }
+
         /* 错误 */
         .error {
             display: none;
@@ -192,7 +226,7 @@
         <h1>YouTube 中文视频字幕转录</h1>
 
         <div class="input-row">
-            <input type="text" id="url" placeholder="粘贴 YouTube 视频链接..." />
+            <input type="text" id="url" name="url" autocomplete="on" placeholder="粘贴 YouTube 视频链接..." />
             <button id="btn" onclick="run()">开始转录</button>
         </div>
 
@@ -202,6 +236,8 @@
         </div>
 
         <div class="error" id="error"></div>
+
+        <div class="stats" id="stats"></div>
 
         <div class="result" id="result">
             <div class="toolbar">
@@ -219,6 +255,65 @@
 
     <script>
         let srtContent = '';
+        let stageTimer = null;
+        let stageLabel = '';
+        let stageStart = 0;
+        let stageHistory = [];
+        let currentSpeed = '';
+
+        function fmtSec(sec) {
+            const m = Math.floor(sec / 60);
+            const s = sec % 60;
+            return m > 0 ? `${m}分${s}秒` : `${s}秒`;
+        }
+
+        function startStageTimer(label) {
+            // 记录上一个阶段的耗时
+            if (stageLabel && stageStart) {
+                stageHistory.push({ label: stageLabel, seconds: Math.floor((Date.now() - stageStart) / 1000) });
+            }
+            stageLabel = label;
+            stageStart = Date.now();
+            currentSpeed = '';
+            const progressText = document.getElementById('progressText');
+            progressText.textContent = `${label}（0秒）`;
+            if (stageTimer) clearInterval(stageTimer);
+            stageTimer = setInterval(() => {
+                const elapsed = Math.floor((Date.now() - stageStart) / 1000);
+                const speedPart = currentSpeed ? ` | ${currentSpeed}` : '';
+                progressText.textContent = `${stageLabel}${speedPart}（${fmtSec(elapsed)}）`;
+            }, 1000);
+        }
+
+        function stopStageTimer() {
+            // 记录最后一个阶段
+            if (stageLabel && stageStart) {
+                stageHistory.push({ label: stageLabel, seconds: Math.floor((Date.now() - stageStart) / 1000) });
+            }
+            if (stageTimer) { clearInterval(stageTimer); stageTimer = null; }
+            stageLabel = '';
+            stageStart = 0;
+        }
+
+        function showStats(videoDuration) {
+            const statsEl = document.getElementById('stats');
+            const totalSec = stageHistory.reduce((sum, s) => sum + s.seconds, 0);
+
+            let html = '<div class="stats-title">耗时统计</div>';
+            if (videoDuration > 0) {
+                const m = Math.floor(videoDuration / 60);
+                const s = Math.floor(videoDuration % 60);
+                const durStr = m > 0 ? `${m}分${s}秒` : `${s}秒`;
+                html += `<div class="stats-item"><span class="label">视频时长</span><span class="value">${durStr}</span></div>`;
+            }
+            for (const stage of stageHistory) {
+                html += `<div class="stats-item"><span class="label">${stage.label}</span><span class="value">${fmtSec(stage.seconds)}</span></div>`;
+            }
+            html += `<div class="stats-total"><span>总耗时</span><span>${fmtSec(totalSec)}</span></div>`;
+
+            statsEl.innerHTML = html;
+            statsEl.className = 'stats active';
+        }
 
         async function run() {
             const url = document.getElementById('url').value.trim();
@@ -230,11 +325,15 @@
             const errorEl = document.getElementById('error');
             const resultEl = document.getElementById('result');
 
+            const statsEl = document.getElementById('stats');
+
             btn.disabled = true;
             errorEl.className = 'error';
             resultEl.className = 'result';
+            statsEl.className = 'stats';
+            stageHistory = [];
             progress.className = 'progress active';
-            progressText.textContent = '正在下载音频并转录，请耐心等待...';
+            startStageTimer('正在准备');
 
             try {
                 const resp = await fetch('/transcribe', {
@@ -242,33 +341,56 @@
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ url }),
                 });
-                const data = await resp.json();
 
-                if (!resp.ok || data.error) {
-                    throw new Error(data.error || '请求失败');
+                const reader = resp.body.getReader();
+                const decoder = new TextDecoder();
+                let buffer = '';
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+                    buffer += decoder.decode(value, { stream: true });
+
+                    const lines = buffer.split('\n');
+                    buffer = lines.pop();
+
+                    for (const line of lines) {
+                        if (!line.startsWith('data: ')) continue;
+                        const msg = JSON.parse(line.slice(6));
+
+                        if (msg.type === 'stage') {
+                            startStageTimer(msg.stage);
+                        } else if (msg.type === 'speed') {
+                            currentSpeed = msg.text || '';
+                        } else if (msg.type === 'error') {
+                            throw new Error(msg.error);
+                        } else if (msg.type === 'result') {
+                            stopStageTimer();
+                            showStats(msg.duration || 0);
+
+                            srtContent = msg.srt;
+
+                            const list = document.getElementById('subtitleList');
+                            list.innerHTML = '';
+                            for (const seg of msg.segments) {
+                                const div = document.createElement('div');
+                                div.className = 'subtitle-item';
+                                div.innerHTML = `
+                                    <span class="ts">${fmtTime(seg.start)}</span>
+                                    <span class="text">${escHtml(seg.text)}</span>
+                                `;
+                                list.appendChild(div);
+                            }
+                            resultEl.className = 'result active';
+                        }
+                    }
                 }
-
-                srtContent = data.srt;
-
-                // 渲染字幕列表
-                const list = document.getElementById('subtitleList');
-                list.innerHTML = '';
-                for (const seg of data.segments) {
-                    const div = document.createElement('div');
-                    div.className = 'subtitle-item';
-                    div.innerHTML = `
-                        <span class="ts">${fmtTime(seg.start)}</span>
-                        <span class="text">${escHtml(seg.text)}</span>
-                    `;
-                    list.appendChild(div);
-                }
-
-                resultEl.className = 'result active';
 
             } catch (e) {
                 errorEl.textContent = e.message;
                 errorEl.className = 'error active';
             } finally {
+                stopStageTimer();
                 progress.className = 'progress';
                 btn.disabled = false;
             }
