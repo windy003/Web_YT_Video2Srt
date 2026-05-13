@@ -204,9 +204,12 @@ def transcribe():
                     elif "result" in update:
                         raw_path = update["result"]
 
-                # 2. 压缩音频
-                yield from send_stage("正在压缩音频")
-                audio_path = compress_audio(raw_path, tmp_dir)
+                # 2. 压缩音频（仅超过 25MB 时）
+                if os.path.getsize(raw_path) > MAX_FILE_SIZE:
+                    yield from send_stage("正在压缩音频")
+                    audio_path = compress_audio(raw_path, tmp_dir)
+                else:
+                    audio_path = raw_path
 
                 # 获取视频时长
                 video_duration = get_audio_duration(audio_path)
