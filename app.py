@@ -33,7 +33,7 @@ def download_audio(url: str, out_dir: str):
     raw_path = os.path.join(out_dir, "raw_audio")
     cmd_dl = [
         "yt-dlp",
-        "-f", "worstaudio",
+        "-f", "worstaudio/worst",
         "-x",
         "--audio-format", "opus",
         "--audio-quality", "9",

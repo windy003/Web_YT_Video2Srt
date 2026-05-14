@@ -223,11 +223,16 @@
 </head>
 <body>
     <div class="container">
-        <h1>YouTube 中文视频字幕转录</h1>
+        <h1>YouTube / TikTok 中文视频字幕转录</h1>
 
         <div class="input-row">
             <input type="text" id="url" name="url" autocomplete="on" placeholder="粘贴 YouTube 视频链接..." />
-            <button id="btn" onclick="run()">开始转录</button>
+            <button id="btn" onclick="run('youtube')">开始转录</button>
+        </div>
+
+        <div class="input-row">
+            <input type="text" id="tiktokUrl" name="tiktokUrl" autocomplete="on" placeholder="粘贴 TikTok 视频链接..." />
+            <button id="tiktokBtn" onclick="run('tiktok')">开始转录</button>
         </div>
 
         <div class="progress" id="progress">
@@ -328,11 +333,15 @@
             statsEl.className = 'stats active';
         }
 
-        async function run() {
-            const url = document.getElementById('url').value.trim();
+        async function run(source) {
+            source = source || 'youtube';
+            const inputId = source === 'tiktok' ? 'tiktokUrl' : 'url';
+            const btnId = source === 'tiktok' ? 'tiktokBtn' : 'btn';
+            const url = document.getElementById(inputId).value.trim();
             if (!url) return;
 
-            const btn = document.getElementById('btn');
+            const btn = document.getElementById(btnId);
+            const otherBtn = document.getElementById(source === 'tiktok' ? 'btn' : 'tiktokBtn');
             const progress = document.getElementById('progress');
             const progressText = document.getElementById('progressText');
             const errorEl = document.getElementById('error');
@@ -341,6 +350,7 @@
             const statsEl = document.getElementById('stats');
 
             btn.disabled = true;
+            if (otherBtn) otherBtn.disabled = true;
             errorEl.className = 'error';
             resultEl.className = 'result';
             statsEl.className = 'stats';
@@ -406,6 +416,7 @@
                 stopStageTimer();
                 progress.className = 'progress';
                 btn.disabled = false;
+                if (otherBtn) otherBtn.disabled = false;
             }
         }
 
@@ -456,7 +467,10 @@
 
         // 回车触发
         document.getElementById('url').addEventListener('keydown', e => {
-            if (e.key === 'Enter') run();
+            if (e.key === 'Enter') run('youtube');
+        });
+        document.getElementById('tiktokUrl').addEventListener('keydown', e => {
+            if (e.key === 'Enter') run('tiktok');
         });
     </script>
 </body>
