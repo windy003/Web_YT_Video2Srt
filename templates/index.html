@@ -261,6 +261,7 @@
     <div class="toast" id="toast"></div>
 
     <script>
+        const INITIAL_LATEST = {{ latest|tojson if latest else 'null' }};
         let srtContent = '';
         const MIN_FONT_SIZE = 10;
         const MAX_FONT_SIZE = 40;
@@ -472,6 +473,36 @@
         document.getElementById('tiktokUrl').addEventListener('keydown', e => {
             if (e.key === 'Enter') run('tiktok');
         });
+
+        function renderSegments(segments) {
+            const list = document.getElementById('subtitleList');
+            list.innerHTML = '';
+            for (const seg of segments) {
+                const div = document.createElement('div');
+                div.className = 'subtitle-item';
+                div.innerHTML = `
+                    <span class="ts">${fmtTime(seg.start)}</span>
+                    <span class="text" style="font-size:${currentFontSize}px">${escHtml(seg.text)}</span>
+                `;
+                list.appendChild(div);
+            }
+        }
+
+        if (INITIAL_LATEST && INITIAL_LATEST.segments) {
+            srtContent = INITIAL_LATEST.srt || '';
+            if (INITIAL_LATEST.url) {
+                const targetInput = /tiktok/i.test(INITIAL_LATEST.url)
+                    ? document.getElementById('tiktokUrl')
+                    : document.getElementById('url');
+                targetInput.value = INITIAL_LATEST.url;
+            }
+            renderSegments(INITIAL_LATEST.segments);
+            document.getElementById('result').className = 'result active';
+            if (Array.isArray(INITIAL_LATEST.stages) && INITIAL_LATEST.stages.length > 0) {
+                stageHistory = INITIAL_LATEST.stages.slice();
+                showStats(INITIAL_LATEST.duration || 0);
+            }
+        }
     </script>
 </body>
 </html>

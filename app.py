@@ -1,5 +1,6 @@
 import os
 import re
+import time
 import uuid
 import subprocess
 import tempfile
@@ -24,6 +25,24 @@ GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
 MAX_FILE_SIZE = 25 * 1024 * 1024
 # 分片时长（秒），保证每片 < 25MB
 CHUNK_DURATION = 600  # 10 分钟
+
+LATEST_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "latest.json")
+
+
+def save_latest(data: dict) -> None:
+    try:
+        with open(LATEST_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False)
+    except Exception:
+        pass
+
+
+def load_latest() -> dict | None:
+    try:
+        with open(LATEST_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return None
 
 
 def download_audio(url: str, out_dir: str):
@@ -151,7 +170,12 @@ def segments_to_srt(segments: list[dict]) -> str:
 
 @app.route("/")
 def index():
-    return render_template("index.html")
+    return render_template("index.html", latest=None)
+
+
+@app.route("/latest.html")
+def latest_page():
+    return render_template("index.html", latest=load_latest())
 
 
 @app.route("/transcribe", methods=["POST"])
@@ -162,8 +186,28 @@ def transcribe():
         return jsonify({"error": "请输入视频链接"}), 400
 
     def generate():
+        stage_state = {"label": None, "start": None}
+        stage_history = []
+
         def send_stage(stage):
+            now = time.time()
+            if stage_state["label"] is not None and stage_state["start"] is not None:
+                stage_history.append({
+                    "label": stage_state["label"],
+                    "seconds": int(now - stage_state["start"]),
+                })
+            stage_state["label"] = stage
+            stage_state["start"] = now
             yield f"data: {json.dumps({'type': 'stage', 'stage': stage})}\n\n"
+
+        def finalize_stages():
+            if stage_state["label"] is not None and stage_state["start"] is not None:
+                stage_history.append({
+                    "label": stage_state["label"],
+                    "seconds": int(time.time() - stage_state["start"]),
+                })
+                stage_state["label"] = None
+                stage_state["start"] = None
 
         try:
             with tempfile.TemporaryDirectory() as tmp_dir:
@@ -237,6 +281,14 @@ def transcribe():
                 # 4. 生成 SRT
                 yield from send_stage("正在生成字幕文件")
                 srt_text = segments_to_srt(all_segments)
+                finalize_stages()
+                save_latest({
+                    "url": url,
+                    "srt": srt_text,
+                    "segments": all_segments,
+                    "duration": video_duration,
+                    "stages": stage_history,
+                })
                 yield f"data: {json.dumps({'type': 'result', 'srt': srt_text, 'segments': all_segments, 'duration': video_duration})}\n\n"
 
         except subprocess.CalledProcessError as e:
