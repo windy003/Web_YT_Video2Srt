@@ -52,6 +52,7 @@ def download_audio(url: str, out_dir: str):
     raw_path = os.path.join(out_dir, "raw_audio")
     cmd_dl = [
         "yt-dlp",
+        "--print", "before_dl:__TITLE__%(title)s",
         "-f", "worstaudio/worst",
         "-x",
         "--audio-format", "opus",
@@ -66,8 +67,13 @@ def download_audio(url: str, out_dir: str):
         cmd_dl, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         text=True, **_subprocess_kwargs,
     )
+    title = ""
     for line in proc.stdout:
         line = line.strip()
+        if line.startswith("__TITLE__"):
+            title = line[len("__TITLE__"):].strip()
+            yield {"title": title}
+            continue
         # yt-dlp 进度行示例: [download]  45.0% of 1.23MiB at 500.00KiB/s ETA 00:02
         m = re.search(r'\[download\]\s+([\d.]+%)\s+of\s+\S+\s+at\s+(\S+/s)', line)
         if m and m.group(1) != '100.0%' and m.group(1) != '100%':
@@ -214,8 +220,12 @@ def transcribe():
                 # 1. 下载音频
                 yield from send_stage("正在下载音频")
                 raw_path = None
+                video_title = ""
                 for update in download_audio(url, tmp_dir):
-                    if "speed" in update:
+                    if "title" in update:
+                        video_title = update["title"]
+                        yield f"data: {json.dumps({'type': 'title', 'title': video_title})}\n\n"
+                    elif "speed" in update:
                         yield f"data: {json.dumps({'type': 'speed', 'text': update['speed']})}\n\n"
                     elif "result" in update:
                         raw_path = update["result"]
@@ -284,12 +294,13 @@ def transcribe():
                 finalize_stages()
                 save_latest({
                     "url": url,
+                    "title": video_title,
                     "srt": srt_text,
                     "segments": all_segments,
                     "duration": video_duration,
                     "stages": stage_history,
                 })
-                yield f"data: {json.dumps({'type': 'result', 'srt': srt_text, 'segments': all_segments, 'duration': video_duration})}\n\n"
+                yield f"data: {json.dumps({'type': 'result', 'title': video_title, 'srt': srt_text, 'segments': all_segments, 'duration': video_duration})}\n\n"
 
         except subprocess.CalledProcessError as e:
             err_msg = e.stderr if e.stderr else str(e)

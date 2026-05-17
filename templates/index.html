@@ -147,6 +147,19 @@
         }
         .result.active { display: block; }
 
+        .video-title {
+            font-size: 18px;
+            font-weight: 600;
+            color: #111;
+            margin-bottom: 14px;
+            padding: 12px 16px;
+            background: #f8f9fa;
+            border-left: 3px solid #3ea6ff;
+            border-radius: 4px;
+            word-break: break-word;
+        }
+        .video-title:empty { display: none; }
+
         .toolbar {
             display: flex;
             justify-content: space-between;
@@ -245,6 +258,7 @@
         <div class="stats" id="stats"></div>
 
         <div class="result" id="result">
+            <div class="video-title" id="videoTitle"></div>
             <div class="toolbar">
                 <h2>字幕内容</h2>
                 <div class="toolbar-btns">
@@ -355,6 +369,7 @@
             errorEl.className = 'error';
             resultEl.className = 'result';
             statsEl.className = 'stats';
+            document.getElementById('videoTitle').textContent = '';
             stageHistory = [];
             progress.className = 'progress active';
             startStageTimer('正在准备');
@@ -386,6 +401,8 @@
                             startStageTimer(msg.stage);
                         } else if (msg.type === 'speed') {
                             currentSpeed = msg.text || '';
+                        } else if (msg.type === 'title') {
+                            document.getElementById('videoTitle').textContent = msg.title || '';
                         } else if (msg.type === 'error') {
                             throw new Error(msg.error);
                         } else if (msg.type === 'result') {
@@ -393,6 +410,9 @@
                             showStats(msg.duration || 0);
 
                             srtContent = msg.srt;
+                            if (msg.title) {
+                                document.getElementById('videoTitle').textContent = msg.title;
+                            }
 
                             const list = document.getElementById('subtitleList');
                             list.innerHTML = '';
@@ -495,6 +515,9 @@
                     ? document.getElementById('tiktokUrl')
                     : document.getElementById('url');
                 targetInput.value = INITIAL_LATEST.url;
+            }
+            if (INITIAL_LATEST.title) {
+                document.getElementById('videoTitle').textContent = INITIAL_LATEST.title;
             }
             renderSegments(INITIAL_LATEST.segments);
             document.getElementById('result').className = 'result active';
