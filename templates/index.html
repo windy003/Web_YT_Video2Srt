@@ -3,6 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="color-scheme" content="light dark">
     <title>YouTube 中文字幕转录</title>
     <link rel="apple-touch-icon" href="{{ url_for('static', filename='2048x2048.png') }}">
     <link rel="icon" href="{{ url_for('static', filename='2048x2048.png') }}">
@@ -197,9 +198,12 @@
             padding: 10px 14px;
             border-radius: 6px;
             transition: background 0.15s;
+            -webkit-tap-highlight-color: transparent;
         }
-        .subtitle-item:hover {
-            background: #f5f5f5;
+        @media (hover: hover) {
+            .subtitle-item:hover {
+                background: #f5f5f5;
+            }
         }
         .ts {
             flex-shrink: 0;
@@ -232,6 +236,48 @@
             pointer-events: none;
         }
         .toast.show { opacity: 1; }
+
+        /* 深色模式:页面自己处理,避免浏览器强制反色造成的点击闪白 */
+        @media (prefers-color-scheme: dark) {
+            body { background: #121212; color: #e6e6e6; }
+            h1, .toolbar h2 { color: #f1f1f1; }
+            input[type="text"] {
+                background: #1e1e1e;
+                color: #e6e6e6;
+                border-color: #3a3a3a;
+            }
+            button:disabled { background: #333; color: #777; }
+            .progress-bar { background: #2a2a2a; }
+            .progress-text { color: #aaa; }
+            .stats {
+                background: #1a1a1a;
+                border-color: #2e2e2e;
+                color: #c9c9c9;
+            }
+            .stats-title, .stats-total { color: #f1f1f1; }
+            .stats-item .label { color: #c9c9c9; }
+            .stats-total { border-top-color: #2e2e2e; }
+            .error {
+                background: #2a1414;
+                border-color: #7f2a2a;
+                color: #ff8a8a;
+            }
+            .video-title {
+                background: #1a1a1a;
+                color: #f1f1f1;
+            }
+            .btn-sm {
+                background: #2a2a2a;
+                color: #c9c9c9;
+                border-color: #3a3a3a;
+            }
+            @media (hover: hover) {
+                .btn-sm:hover { background: #353535; color: #fff; }
+                .subtitle-item:hover { background: #1e1e1e; }
+            }
+            .text { color: #e6e6e6; }
+            .toast { background: #f1f1f1; color: #121212; }
+        }
     </style>
 </head>
 <body>
