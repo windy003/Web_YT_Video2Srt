@@ -50,26 +50,30 @@ def download_audio(url: str, out_dir: str):
     生成器：yield 速度信息字符串，最后 yield {'result': path}。
     """
     raw_path = os.path.join(out_dir, "raw_audio")
+    proxy = os.environ.get("HTTP_PROXY", "") or os.environ.get("http_proxy", "")
     cmd_dl = [
         "yt-dlp",
         "--print", "before_dl:__TITLE__%(title)s",
-        "-f", "worstaudio/worst",
+        "-f", "bestaudio/best",
         "-x",
         "--audio-format", "opus",
         "--audio-quality", "9",
         "--newline",
         "-o", raw_path + ".%(ext)s",
         "--no-playlist",
-        "--proxy", os.environ.get("HTTP_PROXY", ""),
         url,
     ]
+    if proxy:
+        cmd_dl += ["--proxy", proxy]
     proc = subprocess.Popen(
         cmd_dl, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         text=True, **_subprocess_kwargs,
     )
     title = ""
+    all_output = []
     for line in proc.stdout:
         line = line.strip()
+        all_output.append(line)
         if line.startswith("__TITLE__"):
             title = line[len("__TITLE__"):].strip()
             yield {"title": title}
@@ -80,7 +84,8 @@ def download_audio(url: str, out_dir: str):
             yield {"speed": f"下载中 {m.group(1)} | {m.group(2)}"}
     proc.wait()
     if proc.returncode != 0:
-        raise subprocess.CalledProcessError(proc.returncode, cmd_dl)
+        error_detail = "\n".join(all_output[-20:]) if all_output else "(无输出)"
+        raise RuntimeError(f"yt-dlp 失败 (exit {proc.returncode}):\n{error_detail}")
     yield {"speed": ""}
 
     downloaded = None
