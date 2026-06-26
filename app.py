@@ -274,7 +274,6 @@ def transcribe():
                     result = client.audio.transcriptions.create(
                         file=file_tuple,
                         model=model_name,
-                        language="zh",
                         response_format="verbose_json",
                     )
 
