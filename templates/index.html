@@ -64,6 +64,51 @@
             cursor: not-allowed;
         }
 
+        .divider {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin: 24px 0;
+            color: #999;
+            font-size: 13px;
+        }
+        .divider::before, .divider::after {
+            content: "";
+            flex: 1;
+            height: 1px;
+            background: #e0e0e0;
+        }
+
+        .upload-row {
+            align-items: center;
+        }
+        .btn-secondary {
+            padding: 12px 20px;
+            background: #f0f0f0;
+            color: #333;
+            border: 1px solid #ccc;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            white-space: nowrap;
+        }
+        .btn-secondary:hover { background: #e5e5e5; }
+        .btn-secondary:disabled {
+            background: #f5f5f5;
+            color: #bbb;
+            cursor: not-allowed;
+        }
+        .file-name {
+            flex: 1;
+            font-size: 14px;
+            color: #888;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            padding: 0 4px;
+        }
+
         /* 进度条 */
         .progress {
             display: none;
@@ -247,6 +292,16 @@
                 border-color: #3a3a3a;
             }
             button:disabled { background: #333; color: #777; }
+            .divider { color: #777; }
+            .divider::before, .divider::after { background: #2e2e2e; }
+            .btn-secondary {
+                background: #2a2a2a;
+                color: #e6e6e6;
+                border-color: #3a3a3a;
+            }
+            .btn-secondary:hover { background: #353535; }
+            .btn-secondary:disabled { background: #222; color: #666; }
+            .file-name { color: #999; }
             .progress-bar { background: #2a2a2a; }
             .progress-text { color: #aaa; }
             .stats {
@@ -292,6 +347,15 @@
         <div class="input-row">
             <input type="text" id="tiktokUrl" name="tiktokUrl" autocomplete="on" placeholder="粘贴 TikTok 视频链接..." />
             <button id="tiktokBtn" onclick="run('tiktok')">开始转录</button>
+        </div>
+
+        <div class="divider">或</div>
+
+        <div class="input-row upload-row">
+            <button class="btn-secondary" id="pickFileBtn" type="button" onclick="document.getElementById('audioFile').click()">选择本地音频/视频文件</button>
+            <span class="file-name" id="fileName">未选择文件</span>
+            <input type="file" id="audioFile" name="audioFile" accept="audio/*,video/*" hidden />
+            <button id="uploadBtn" onclick="runUpload()" disabled>开始转录</button>
         </div>
 
         <div class="progress" id="progress">
@@ -394,31 +458,89 @@
             statsEl.className = 'stats active';
         }
 
+        function allBusyButtons() {
+            return ['btn', 'tiktokBtn', 'pickFileBtn', 'uploadBtn']
+                .map(id => document.getElementById(id))
+                .filter(Boolean);
+        }
+
+        function setBusy(isBusy) {
+            for (const b of allBusyButtons()) {
+                if (isBusy) {
+                    b.disabled = true;
+                } else if (b.id === 'uploadBtn') {
+                    b.disabled = !document.getElementById('audioFile').files.length;
+                } else {
+                    b.disabled = false;
+                }
+            }
+        }
+
+        async function consumeStream(resp) {
+            if (!resp.ok && resp.headers.get('content-type')?.includes('application/json')) {
+                const errBody = await resp.json();
+                throw new Error(errBody.error || `请求失败 (${resp.status})`);
+            }
+
+            const reader = resp.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = '';
+
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                buffer += decoder.decode(value, { stream: true });
+
+                const lines = buffer.split('\n');
+                buffer = lines.pop();
+
+                for (const line of lines) {
+                    if (!line.startsWith('data: ')) continue;
+                    const msg = JSON.parse(line.slice(6));
+
+                    if (msg.type === 'stage') {
+                        startStageTimer(msg.stage);
+                    } else if (msg.type === 'speed') {
+                        currentSpeed = msg.text || '';
+                    } else if (msg.type === 'title') {
+                        document.getElementById('videoTitle').textContent = msg.title || '';
+                    } else if (msg.type === 'error') {
+                        throw new Error(msg.error);
+                    } else if (msg.type === 'result') {
+                        stopStageTimer();
+                        showStats(msg.duration || 0);
+
+                        srtContent = msg.srt;
+                        if (msg.title) {
+                            document.getElementById('videoTitle').textContent = msg.title;
+                        }
+
+                        renderSegments(msg.segments);
+                        document.getElementById('result').className = 'result active';
+                    }
+                }
+            }
+        }
+
+        function resetUiBeforeRun() {
+            document.getElementById('error').className = 'error';
+            document.getElementById('result').className = 'result';
+            document.getElementById('stats').className = 'stats';
+            document.getElementById('videoTitle').textContent = '';
+            stageHistory = [];
+            document.getElementById('progress').className = 'progress active';
+            startStageTimer('正在准备');
+        }
+
         async function run(source) {
             source = source || 'youtube';
             const inputId = source === 'tiktok' ? 'tiktokUrl' : 'url';
-            const btnId = source === 'tiktok' ? 'tiktokBtn' : 'btn';
             const url = document.getElementById(inputId).value.trim();
             if (!url) return;
 
-            const btn = document.getElementById(btnId);
-            const otherBtn = document.getElementById(source === 'tiktok' ? 'btn' : 'tiktokBtn');
-            const progress = document.getElementById('progress');
-            const progressText = document.getElementById('progressText');
             const errorEl = document.getElementById('error');
-            const resultEl = document.getElementById('result');
-
-            const statsEl = document.getElementById('stats');
-
-            btn.disabled = true;
-            if (otherBtn) otherBtn.disabled = true;
-            errorEl.className = 'error';
-            resultEl.className = 'result';
-            statsEl.className = 'stats';
-            document.getElementById('videoTitle').textContent = '';
-            stageHistory = [];
-            progress.className = 'progress active';
-            startStageTimer('正在准备');
+            setBusy(true);
+            resetUiBeforeRun();
 
             try {
                 const resp = await fetch('/transcribe', {
@@ -426,66 +548,49 @@
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ url }),
                 });
-
-                const reader = resp.body.getReader();
-                const decoder = new TextDecoder();
-                let buffer = '';
-
-                while (true) {
-                    const { done, value } = await reader.read();
-                    if (done) break;
-                    buffer += decoder.decode(value, { stream: true });
-
-                    const lines = buffer.split('\n');
-                    buffer = lines.pop();
-
-                    for (const line of lines) {
-                        if (!line.startsWith('data: ')) continue;
-                        const msg = JSON.parse(line.slice(6));
-
-                        if (msg.type === 'stage') {
-                            startStageTimer(msg.stage);
-                        } else if (msg.type === 'speed') {
-                            currentSpeed = msg.text || '';
-                        } else if (msg.type === 'title') {
-                            document.getElementById('videoTitle').textContent = msg.title || '';
-                        } else if (msg.type === 'error') {
-                            throw new Error(msg.error);
-                        } else if (msg.type === 'result') {
-                            stopStageTimer();
-                            showStats(msg.duration || 0);
-
-                            srtContent = msg.srt;
-                            if (msg.title) {
-                                document.getElementById('videoTitle').textContent = msg.title;
-                            }
-
-                            const list = document.getElementById('subtitleList');
-                            list.innerHTML = '';
-                            for (const seg of msg.segments) {
-                                const div = document.createElement('div');
-                                div.className = 'subtitle-item';
-                                div.innerHTML = `
-                                    <span class="ts">${fmtTime(seg.start)}</span>
-                                    <span class="text" style="font-size:${currentFontSize}px">${escHtml(seg.text)}</span>
-                                `;
-                                list.appendChild(div);
-                            }
-                            resultEl.className = 'result active';
-                        }
-                    }
-                }
-
+                await consumeStream(resp);
             } catch (e) {
                 errorEl.textContent = e.message;
                 errorEl.className = 'error active';
             } finally {
                 stopStageTimer();
-                progress.className = 'progress';
-                btn.disabled = false;
-                if (otherBtn) otherBtn.disabled = false;
+                document.getElementById('progress').className = 'progress';
+                setBusy(false);
             }
         }
+
+        async function runUpload() {
+            const fileInput = document.getElementById('audioFile');
+            const file = fileInput.files[0];
+            if (!file) return;
+
+            const errorEl = document.getElementById('error');
+            setBusy(true);
+            resetUiBeforeRun();
+
+            try {
+                const formData = new FormData();
+                formData.append('file', file);
+                const resp = await fetch('/transcribe_upload', {
+                    method: 'POST',
+                    body: formData,
+                });
+                await consumeStream(resp);
+            } catch (e) {
+                errorEl.textContent = e.message;
+                errorEl.className = 'error active';
+            } finally {
+                stopStageTimer();
+                document.getElementById('progress').className = 'progress';
+                setBusy(false);
+            }
+        }
+
+        document.getElementById('audioFile').addEventListener('change', () => {
+            const file = document.getElementById('audioFile').files[0];
+            document.getElementById('fileName').textContent = file ? file.name : '未选择文件';
+            document.getElementById('uploadBtn').disabled = !file;
+        });
 
         function fmtTime(sec) {
             const h = Math.floor(sec / 3600);

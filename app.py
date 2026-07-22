@@ -21,6 +21,8 @@ if os.name == 'nt':
     _subprocess_kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW
 
 app = Flask(__name__)
+# 本地上传音频文件大小上限
+app.config["MAX_CONTENT_LENGTH"] = 1024 * 1024 * 1024  # 1GB
 
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
 # Groq Whisper 单次上传限制 25MB
@@ -208,6 +210,105 @@ def segments_to_srt(segments: list[dict]) -> str:
     return "\n".join(lines)
 
 
+class StageTracker:
+    """记录各阶段耗时，并产出前端用的 SSE 'stage' 事件."""
+
+    def __init__(self):
+        self.label = None
+        self.start = None
+        self.history = []
+
+    def send(self, stage):
+        now = time.time()
+        if self.label is not None and self.start is not None:
+            self.history.append({"label": self.label, "seconds": int(now - self.start)})
+        self.label = stage
+        self.start = now
+        yield f"data: {json.dumps({'type': 'stage', 'stage': stage})}\n\n"
+
+    def finalize(self):
+        if self.label is not None and self.start is not None:
+            self.history.append({"label": self.label, "seconds": int(time.time() - self.start)})
+            self.label = None
+            self.start = None
+
+
+def run_pipeline(tmp_dir: str, raw_path: str, video_title: str, tracker: StageTracker, source_label: str):
+    """从已拿到的原始音频文件开始：压缩 -> 分片 -> 转录 -> 生成字幕.
+    URL 下载和本地上传两条路径在拿到 raw_path 之后共用这段逻辑。
+    """
+    # 压缩音频（仅超过 25MB 时）
+    if os.path.getsize(raw_path) > MAX_FILE_SIZE:
+        yield from tracker.send("正在压缩音频")
+        audio_path = compress_audio(raw_path, tmp_dir)
+    else:
+        audio_path = raw_path
+
+    # 获取音频时长
+    video_duration = get_audio_duration(audio_path)
+
+    # 分片（长音频）
+    yield from tracker.send("正在音频分片")
+    chunks = split_audio(audio_path, tmp_dir)
+
+    # 逐片转录
+    all_segments = []
+    model_name = "whisper-large-v3"
+    for i, chunk in enumerate(chunks):
+        chunk_label = f"分片 {i+1}/{len(chunks)}" if len(chunks) > 1 else ""
+
+        # 上传阶段
+        if chunk_label:
+            yield from tracker.send(f"正在上传{chunk_label}到 Groq")
+        else:
+            yield from tracker.send("正在上传音频到 Groq")
+
+        client = Groq(api_key=GROQ_API_KEY)
+        with open(chunk, "rb") as f:
+            file_tuple = (os.path.basename(chunk), f.read())
+
+        # 转录阶段
+        if chunk_label:
+            yield from tracker.send(f"正在转录{chunk_label} | 模型: {model_name}")
+        else:
+            yield from tracker.send(f"正在转录音频 | 模型: {model_name}")
+
+        result = client.audio.transcriptions.create(
+            file=file_tuple,
+            model=model_name,
+            response_format="verbose_json",
+        )
+
+        offset = i * CHUNK_DURATION if len(chunks) > 1 else 0.0
+        if hasattr(result, "segments") and result.segments:
+            for seg in result.segments:
+                all_segments.append({
+                    "start": seg["start"] + offset,
+                    "end": seg["end"] + offset,
+                    "text": seg["text"].strip(),
+                })
+        elif hasattr(result, "text") and result.text:
+            all_segments.append({
+                "start": offset,
+                "end": offset + 30.0,
+                "text": result.text.strip(),
+            })
+
+    # 生成 SRT
+    yield from tracker.send("正在生成字幕文件")
+    srt_text = segments_to_srt(all_segments)
+    tracker.finalize()
+    save_latest({
+        "url": source_label,
+        "title": video_title,
+        "srt": srt_text,
+        "segments": all_segments,
+        "duration": video_duration,
+        "stages": tracker.history,
+    })
+    yield f"data: {json.dumps({'type': 'result', 'title': video_title, 'srt': srt_text, 'segments': all_segments, 'duration': video_duration})}\n\n"
+
+
 @app.route("/")
 def index():
     return render_template("index.html", latest=None)
@@ -226,33 +327,11 @@ def transcribe():
         return jsonify({"error": "请输入视频链接"}), 400
 
     def generate():
-        stage_state = {"label": None, "start": None}
-        stage_history = []
-
-        def send_stage(stage):
-            now = time.time()
-            if stage_state["label"] is not None and stage_state["start"] is not None:
-                stage_history.append({
-                    "label": stage_state["label"],
-                    "seconds": int(now - stage_state["start"]),
-                })
-            stage_state["label"] = stage
-            stage_state["start"] = now
-            yield f"data: {json.dumps({'type': 'stage', 'stage': stage})}\n\n"
-
-        def finalize_stages():
-            if stage_state["label"] is not None and stage_state["start"] is not None:
-                stage_history.append({
-                    "label": stage_state["label"],
-                    "seconds": int(time.time() - stage_state["start"]),
-                })
-                stage_state["label"] = None
-                stage_state["start"] = None
-
+        tracker = StageTracker()
         try:
             with tempfile.TemporaryDirectory() as tmp_dir:
                 # 1. 下载音频
-                yield from send_stage("正在下载音频")
+                yield from tracker.send("正在下载音频")
                 raw_path = None
                 video_title = ""
                 for update in download_audio(url, tmp_dir):
@@ -264,76 +343,7 @@ def transcribe():
                     elif "result" in update:
                         raw_path = update["result"]
 
-                # 2. 压缩音频（仅超过 25MB 时）
-                if os.path.getsize(raw_path) > MAX_FILE_SIZE:
-                    yield from send_stage("正在压缩音频")
-                    audio_path = compress_audio(raw_path, tmp_dir)
-                else:
-                    audio_path = raw_path
-
-                # 获取视频时长
-                video_duration = get_audio_duration(audio_path)
-
-                # 2. 分片（长视频）
-                yield from send_stage("正在音频分片")
-                chunks = split_audio(audio_path, tmp_dir)
-
-                # 3. 逐片转录
-                all_segments = []
-                model_name = "whisper-large-v3"
-                for i, chunk in enumerate(chunks):
-                    chunk_label = f"分片 {i+1}/{len(chunks)}" if len(chunks) > 1 else ""
-
-                    # 上传阶段
-                    if chunk_label:
-                        yield from send_stage(f"正在上传{chunk_label}到 Groq")
-                    else:
-                        yield from send_stage("正在上传音频到 Groq")
-
-                    client = Groq(api_key=GROQ_API_KEY)
-                    with open(chunk, "rb") as f:
-                        file_tuple = (os.path.basename(chunk), f.read())
-
-                    # 转录阶段
-                    if chunk_label:
-                        yield from send_stage(f"正在转录{chunk_label} | 模型: {model_name}")
-                    else:
-                        yield from send_stage(f"正在转录音频 | 模型: {model_name}")
-
-                    result = client.audio.transcriptions.create(
-                        file=file_tuple,
-                        model=model_name,
-                        response_format="verbose_json",
-                    )
-
-                    offset = i * CHUNK_DURATION if len(chunks) > 1 else 0.0
-                    if hasattr(result, "segments") and result.segments:
-                        for seg in result.segments:
-                            all_segments.append({
-                                "start": seg["start"] + offset,
-                                "end": seg["end"] + offset,
-                                "text": seg["text"].strip(),
-                            })
-                    elif hasattr(result, "text") and result.text:
-                        all_segments.append({
-                            "start": offset,
-                            "end": offset + 30.0,
-                            "text": result.text.strip(),
-                        })
-
-                # 4. 生成 SRT
-                yield from send_stage("正在生成字幕文件")
-                srt_text = segments_to_srt(all_segments)
-                finalize_stages()
-                save_latest({
-                    "url": url,
-                    "title": video_title,
-                    "srt": srt_text,
-                    "segments": all_segments,
-                    "duration": video_duration,
-                    "stages": stage_history,
-                })
-                yield f"data: {json.dumps({'type': 'result', 'title': video_title, 'srt': srt_text, 'segments': all_segments, 'duration': video_duration})}\n\n"
+                yield from run_pipeline(tmp_dir, raw_path, video_title, tracker, url)
 
         except subprocess.CalledProcessError as e:
             err_msg = e.stderr if e.stderr else str(e)
@@ -342,6 +352,46 @@ def transcribe():
             yield f"data: {json.dumps({'type': 'error', 'error': str(e)})}\n\n"
 
     return Response(generate(), mimetype='text/event-stream')
+
+
+@app.route("/transcribe_upload", methods=["POST"])
+def transcribe_upload():
+    file = request.files.get("file")
+    if not file or not file.filename:
+        return jsonify({"error": "请选择要上传的音频文件"}), 400
+
+    original_name = file.filename
+    file_bytes = file.read()
+    if not file_bytes:
+        return jsonify({"error": "文件为空"}), 400
+
+    def generate():
+        tracker = StageTracker()
+        try:
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                # 1. 保存上传的文件
+                yield from tracker.send("正在保存上传的音频")
+                ext = os.path.splitext(original_name)[1] or ".dat"
+                raw_path = os.path.join(tmp_dir, "raw_audio" + ext)
+                with open(raw_path, "wb") as f:
+                    f.write(file_bytes)
+                video_title = os.path.splitext(original_name)[0]
+                yield f"data: {json.dumps({'type': 'title', 'title': video_title})}\n\n"
+
+                yield from run_pipeline(tmp_dir, raw_path, video_title, tracker, f"[本地上传] {original_name}")
+
+        except subprocess.CalledProcessError as e:
+            err_msg = e.stderr if e.stderr else str(e)
+            yield f"data: {json.dumps({'type': 'error', 'error': f'转码失败: {err_msg}'})}\n\n"
+        except Exception as e:
+            yield f"data: {json.dumps({'type': 'error', 'error': str(e)})}\n\n"
+
+    return Response(generate(), mimetype='text/event-stream')
+
+
+@app.errorhandler(413)
+def file_too_large(e):
+    return jsonify({"error": "文件过大，超过上传大小限制（1GB）"}), 413
 
 
 if __name__ == "__main__":
