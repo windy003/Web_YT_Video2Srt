@@ -2,6 +2,8 @@ import os
 import re
 import time
 import uuid
+import queue
+import threading
 import subprocess
 import tempfile
 from pathlib import Path
@@ -25,6 +27,8 @@ GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
 MAX_FILE_SIZE = 25 * 1024 * 1024
 # 分片时长（秒），保证每片 < 25MB
 CHUNK_DURATION = 600  # 10 分钟
+# yt-dlp 超过这么久没有任何新输出，就判定为卡死并中止
+STALL_TIMEOUT = 120
 
 LATEST_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "latest.json")
 
@@ -59,6 +63,7 @@ def download_audio(url: str, out_dir: str):
         "--audio-format", "opus",
         "--audio-quality", "9",
         "--newline",
+        "--remote-components", "ejs:github",
         "-o", raw_path + ".%(ext)s",
         "--no-playlist",
         url,
@@ -69,9 +74,33 @@ def download_audio(url: str, out_dir: str):
         cmd_dl, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         text=True, **_subprocess_kwargs,
     )
+
+    # 用后台线程读取 stdout，主循环通过队列 + 超时来检测"卡死无输出"
+    line_queue: queue.Queue = queue.Queue()
+
+    def _reader():
+        try:
+            for line in proc.stdout:
+                line_queue.put(line)
+        finally:
+            line_queue.put(None)  # EOF 哨兵
+
+    reader_thread = threading.Thread(target=_reader, daemon=True)
+    reader_thread.start()
+
     title = ""
     all_output = []
-    for line in proc.stdout:
+    while True:
+        try:
+            line = line_queue.get(timeout=STALL_TIMEOUT)
+        except queue.Empty:
+            proc.kill()
+            raise RuntimeError(
+                f"yt-dlp 下载已卡住超过 {STALL_TIMEOUT} 秒无任何响应，已自动中止。"
+                f"可能原因：网络问题、代理配置不当，或 YouTube 触发了限流/反爬（可尝试更新 yt-dlp 或稍后重试）。"
+            )
+        if line is None:
+            break
         line = line.strip()
         all_output.append(line)
         if line.startswith("__TITLE__"):
