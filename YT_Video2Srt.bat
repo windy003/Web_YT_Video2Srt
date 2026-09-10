@@ -1,1 +1,1 @@
-start  /b   pythonw  "D:\files\using\Web\Web_YT_Video2Srt\app.py"
+start  /b  "" "D:\files\using\Web\Web_YT_Video2Srt\.venv\Scripts\pythonw.exe"  "D:\files\using\Web\Web_YT_Video2Srt\app.py"
